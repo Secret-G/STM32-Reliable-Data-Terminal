@@ -1,0 +1,59 @@
+# =========================
+# Keil Build Files
+# =========================
+
+*.axf
+*.bak
+*.hex
+*.bin
+*.map
+*.lst
+*.o
+*.d
+*.crf
+*.htm
+*.dep
+*.lnp
+
+Objects/
+Listings/
+
+
+# =========================
+# Keil User Settings
+# =========================
+
+*.uvguix.*
+*.uvprojx.user
+*.uvoptx
+
+# User files
+*.uvguix.*
+*.uvprojx.user
+
+# =========================
+# VSCode
+# =========================
+
+.vscode/
+
+
+# =========================
+# Temporary Files
+# =========================
+
+*.tmp
+*.log
+*.swp
+
+# Qt / CMake build directories
+wifi-server/build/
+build/
+cmake-build-*/
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
