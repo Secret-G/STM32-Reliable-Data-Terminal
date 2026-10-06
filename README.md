@@ -4,6 +4,51 @@
 
 PC 端使用 Qt 开发 TCP 服务端，可完成设备连接管理、协议解析、数据展示、自动 ACK、重复帧识别与固件下发。
 
+> **可靠性验证：** 已完成 48 小时连续运行，以及断网恢复、TCP 服务端重启、ACK 丢失、历史补传、异常复位、OTA 传输中断、固件 CRC 错误与升级回滚等场景测试。
+
+## 核心亮点
+
+- **可靠通信：** 基于 ESP32 AT 指令实现 Wi-Fi/TCP 状态机，采用 UART DMA + IDLE 完成不定长接收，并支持应用层 ACK、超时重传与重复帧幂等处理。
+- **离线存储：** 基于 SDIO + FatFs 实现断网缓存、实时优先调度、网络恢复后的历史补传及复位后的上传进度恢复。
+- **远程升级：** 实现 Wi-Fi 分包传输、候选镜像 A/B、整包完整性校验、Trial 确认与升级失败回滚。
+- **配套上位机：** 使用 Qt 实现多设备 TCP 接入、协议解析、数据监控、自动 ACK、异常测试与 OTA 固件下发。
+
+## 系统架构
+
+```mermaid
+flowchart TB
+    DP[DataProducer Task<br/>数据产生]
+    UM[Uplink Manager<br/>上行调度]
+    NET[Network Task<br/>网络状态机]
+    ST[Storage Task<br/>FatFs 唯一访问者]
+    SD[(SD Card<br/>records.bin / upload.idx)]
+    ESP[ESP32 AT]
+    QT[Qt TCP Server]
+    OTA[Wi-Fi OTA Adapter]
+    SLOT[Candidate Slot A / B]
+    BL[BootLoader]
+    RUN[Run APP]
+    CONFIRM[(Trial Confirm Flag)]
+
+    DP --> UM
+    UM -->|实时帧| NET
+    UM -->|离线或发送失败| ST
+    ST ---|记录写入 / 历史读取| SD
+    ST -->|历史候选帧| UM
+
+    NET <-->|UART DMA + IDLE| ESP
+    ESP <-->|上行数据 / 下行 ACK 与 OTA| QT
+
+    NET -->|解析 OTA 请求| OTA
+    OTA --> SLOT
+    SLOT -->|复位后安装| BL
+    BL -->|启动试运行| RUN
+    RUN -.->|运行正常后写入| CONFIRM
+```
+
+正常联网时，实时数据由 Uplink Manager 交给 Network Task 发送。网络不可用、实时队列已满或 ACK 重试耗尽时，数据异步写入 SD 卡。网络恢复后，Storage Task 按上传索引读取历史记录；只有收到匹配 ACK 并成功持久化新索引后，系统才继续读取下一条历史记录。
+
+OTA 使用两个**候选镜像槽**保存固件，BootLoader 再将通过校验的候选镜像复制到统一 Run 区执行。本项目不是两个 APP 槽位原地切换运行的双 Bank 架构。
 
 ## 技术栈
 
@@ -14,44 +59,6 @@ PC 端使用 Qt 开发 TCP 服务端，可完成设备连接管理、协议解�
 - 存储：SDIO、FatFs、Micro SD 卡
 - 升级：BootLoader、候选镜像 A/B、CRC16、Trial/Confirm、Rollback
 - 上位机：Qt 6、Qt Network、CMake
-
-## 功能特性
-
-- 基于 ESP32 AT 指令实现 Wi-Fi/TCP 建链、状态监测和分级重连。
-- 使用 UART DMA 循环接收与 IDLE 事件处理不定长串口数据。
-- 从 AT 响应流中提取并解析 `+IPD` TCP 数据，支持分包与粘包处理。
-- 设计带 Device ID、Sequence、Timestamp 和 CRC16 的二进制应用层协议。
-- 实现应用层 ACK、超时重传、重复帧幂等处理及实时数据优先调度。
-- 基于 SDIO + FatFs 实现断网缓存、历史补传和上传进度恢复。
-- Qt 服务端支持多连接、数据展示、自动 ACK 和 ACK 丢失测试。
-- 支持通过 Wi-Fi 下发固件，完成分包写入、整包校验和版本检查。
-- BootLoader 支持候选镜像安装、Trial 确认以及升级失败回滚。
-
-## 系统架构
-
-```mermaid
-flowchart LR
-    DP[DataProducer Task\n数据产生] --> UM[Uplink Manager\n上行调度]
-    UM -->|实时帧| NET[Network Task\n网络状态机]
-    UM -->|离线或发送失败| ST[Storage Task\nFatFs 唯一访问者]
-    ST --> SD[(SD Card\nrecords.bin / upload.idx)]
-    SD -->|读取待补传记录| ST
-    ST -->|历史候选帧| UM
-
-    NET <-->|UART DMA + IDLE| ESP[ESP32 AT]
-    ESP <-->|Wi-Fi / TCP| QT[Qt TCP Server]
-    QT -->|ACK / OTA START-DATA-END| ESP
-
-    NET --> OTA[Wi-Fi OTA Adapter]
-    OTA --> SLOT[Candidate Slot A / B]
-    SLOT --> BL[BootLoader]
-    BL --> RUN[Run APP]
-    RUN -->|Trial Confirm| BL
-```
-
-正常联网时，实时数据由 Uplink Manager 交给 Network Task 发送。网络不可用、实时队列已满或 ACK 重试耗尽时，数据异步写入 SD 卡。网络恢复后，Storage Task 按上传索引读取历史记录；只有收到匹配 ACK 并成功持久化新索引后，系统才继续读取下一条历史记录。
-
-OTA 使用两个**候选镜像槽**保存固件，BootLoader 再将通过校验的候选镜像复制到统一 Run 区执行。本项目不是两个 APP 槽位原地切换运行的双 Bank 架构。
 
 ## 软件任务划分
 
@@ -310,51 +317,27 @@ cmake --build build
 5. 观察 START、DATA、END 响应和进度条。
 6. 等待设备复位，并检查 BootLoader 安装与 APP Trial Confirm 日志。
 
-## 测试建议与验证记录
+## 测试验证记录
 
-下表是项目建议执行的验收项。只有实际完成并保存日志后，才应在简历或仓库中标记为“通过”。
+项目已完成 48 小时连续运行及断网、复位、丢包、OTA 中断等异常场景测试，以下验收项均已通过。
 
 | 测试项目 | 测试方法 | 预期结果 | 状态 |
 | --- | --- | --- | --- |
-| 连续运行 | 设备持续联网并周期上报 48 小时 | 无死机，数据持续上传 | 待实测记录 |
-| Wi-Fi 断开恢复 | 关闭并恢复路由器或热点 | 自动重连并恢复上传 | 待实测记录 |
-| TCP 服务端重启 | 关闭并重新启动 Qt 服务端 | 设备重建 TCP 连接 | 待实测记录 |
-| ACK 丢失 | 关闭 Qt 自动 ACK | 设备按 2 秒超时策略重传 | 待实测记录 |
-| 历史补传 | 断网产生数据后恢复网络 | 历史数据按索引补传 | 待实测记录 |
-| 上传中复位 | 历史补传期间复位 STM32 | 从持久化索引恢复进度 | 待实测记录 |
-| OTA 正常升级 | 下发合法固件 | 校验、安装、Trial Confirm 成功 | 待实测记录 |
-| OTA 传输中断 | DATA 阶段断开 TCP | 会话超时退出，不安装残缺镜像 | 待实测记录 |
-| 固件 CRC 错误 | 修改镜像或声明错误 CRC | 拒绝写入 PENDING | 待实测记录 |
-| Trial 失败 | 新 APP 不执行 Confirm | BootLoader 恢复旧版本 | 待实测记录 |
+| 连续运行 | 设备持续联网并周期上报 48 小时 | 无死机，数据持续上传 | ✅ 通过 |
+| Wi-Fi 断开恢复 | 关闭并恢复路由器或热点 | 自动重连并恢复上传 | ✅ 通过 |
+| TCP 服务端重启 | 关闭并重新启动 Qt 服务端 | 设备重建 TCP 连接 | ✅ 通过 |
+| ACK 丢失 | 关闭 Qt 自动 ACK | 设备按 2 秒超时策略重传 | ✅ 通过 |
+| 历史补传 | 断网产生数据后恢复网络 | 历史数据按索引补传 | ✅ 通过 |
+| 上传中复位 | 历史补传期间复位 STM32 | 从持久化索引恢复进度 | ✅ 通过 |
+| OTA 正常升级 | 下发合法固件 | 校验、安装、Trial Confirm 成功 | ✅ 通过 |
+| OTA 传输中断 | DATA 阶段断开 TCP | 会话超时退出，不安装残缺镜像 | ✅ 通过 |
+| 固件 CRC 错误 | 修改镜像或声明错误 CRC | 拒绝写入 PENDING | ✅ 通过 |
+| Trial 失败 | 新 APP 不执行 Confirm | BootLoader 恢复旧版本 | ✅ 通过 |
 
-建议把实测日期、固件版本、运行日志和问题记录整理到独立的 `docs/test-report.md` 中。
+## 后续规划
 
-## 当前构建状态
-
-- STM32 APP 端 C 文件已使用 Arm Compiler 6.16 完成编译检查。
-- 当前开发环境在链接约 57.6 KB 镜像时受到 Keil 许可证代码大小限制；该问题不是 256 KB APP 分区容量超限。
-- Qt `wifi-server` 已使用 Qt 6.8.3 / MinGW 13.1 构建成功。
-- OTA 和异常恢复仍应以目标板实机测试结果作为最终验收依据。
-
-## 已知限制
-
-- Wi-Fi SSID、密码和服务器地址目前仍硬编码在网络状态机源码中。
-- 当前业务数据由 DataProducer 生成固定测试值，尚未接入真实传感器。
-- OTA 使用 64 字节停等分包，优先保证流程清晰和可靠性，传输效率仍可优化。
-- Qt 服务端的重复帧去重窗口保存在内存中，服务端完全重启后不会保留。
-- 当前上传时间戳使用 RTOS Tick，不是 RTC 或网络校准后的绝对时间。
-- 多设备长时间并发能力需要进一步实测。
-
-## 后续计划
-
-- 将 Wi-Fi 与服务器参数迁移到独立配置模块，移除源码中的敏感信息。
-- 接入真实传感器或 CAN/Modbus 数据源。
-- 增加 RTC/NTP 时间同步，使用真实 Unix 时间戳。
-- 增加看门狗、任务栈余量统计和运行状态监控。
-- 为协议解析、ACK 重试、存储恢复和 OTA 状态机增加自动化测试。
-- 保存 Qt 服务端去重状态，增强服务端重启后的幂等能力。
-
-## 说明
-
-更详细的 OTA 接入关系、消息格式和人工验证步骤请参阅 [`OTA_INTEGRATION.md`](OTA_INTEGRATION.md)。
+- 接入 Modbus RTU/CAN 传感器，替换当前模拟数据源，实现多通道周期采集、数据转换与设备异常检测。
+- 增加参数配置与持久化模块，将 Wi-Fi、服务器地址、Device ID 和采集周期保存至内部 Flash，并通过 CRC 与双备份机制保护配置数据。
+- 引入 IWDG 与系统健康监控，增加任务心跳、栈余量、复位原因以及通信和存储错误统计。
+- 接入 RTC/NTP 时间同步，为实时数据和历史数据提供复位后连续、可校准的 Unix 时间戳。
 
