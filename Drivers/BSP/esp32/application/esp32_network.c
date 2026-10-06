@@ -292,7 +292,7 @@ void ESP32_Network_Run(void)
             break;
 
         case ESP32_NET_JOIN_WIFI:
-            result = ESP32_AT_Command("AT+CWJAP=\"123\",\"chen92516\"\r\n","OK", 15000U);
+            result = ESP32_AT_Command("AT+CWJAP=\"Secret_5G\",\"chen92516\"\r\n","OK", 15000U);
             net_state = (result == ESP32_AT_RESULT_OK) ? ESP32_NET_QUERY_IP : ESP32_NET_WIFI_RETRY_WAIT;
             if (result != ESP32_AT_RESULT_OK)
             {
